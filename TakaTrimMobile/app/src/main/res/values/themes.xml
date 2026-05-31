@@ -1,0 +1,7 @@
+<resources>
+    <style name="Theme.TakaTrimMobile" parent="android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:windowActionBar">false</item>
+        <item name="android:windowBackground">#F4F6FB</item>
+    </style>
+</resources>
