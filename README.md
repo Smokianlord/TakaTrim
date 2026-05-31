@@ -2,10 +2,6 @@
 
 TakaTrim is a simple Windows desktop app that calculates the exact amount you need to transfer from bKash to your bank so your balance becomes zero or as close to zero as possible.
 
-## Download
-
-Download the latest version from the **Releases** section:
-
 **TakaTrim.exe**
 
 No installation needed. Just download and double-click the EXE.
@@ -35,4 +31,4 @@ Always check the final fee preview inside the official bKash app before confirmi
 
 ## Disclaimer
 
-TakaTrim is an independent calculator app. It is not affiliated with, endorsed by, or officially connected to bKash, BRAC Bank, Nagad, or any financial institution.
+TakaTrim is an independent calculator app. It is not affiliated with, endorsed by, or officially connected to bKash, BRAC Bank or any financial institution.
