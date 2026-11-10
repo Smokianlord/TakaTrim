@@ -28,4 +28,3 @@ No installation needed. Just download and double-click the EXE.
 ## Important Note
 
 Always check the final fee preview inside the official bKash app before confirming a transfer. Fees and rounding behavior may change.
-
