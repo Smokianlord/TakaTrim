@@ -29,6 +29,3 @@ No installation needed. Just download and double-click the EXE.
 
 Always check the final fee preview inside the official bKash app before confirming a transfer. Fees and rounding behavior may change.
 
-## Disclaimer
-
-TakaTrim is an independent calculator app. It is not affiliated with, endorsed by, or officially connected to bKash, BRAC Bank or any financial institution.
