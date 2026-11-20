@@ -45,7 +45,15 @@ py bkash_zero_balance_desktop_app.py --test
 
 ## Android app
 
-Open `TakaTrimMobile` in Android Studio and run the `app` configuration. Calculator unit tests are in `app/src/test` (`TakaTrimCalculatorTest`).
+**TakaTrim.apk** in the main folder is a ready-to-install debug build. Copy it to your phone and open it (allow "Install unknown apps" for your file manager or browser when asked).
+
+Rebuild it (also runs the calculator unit tests):
+
+```powershell
+.\build_apk.ps1
+```
+
+Or open `TakaTrimMobile` in Android Studio and run the `app` configuration. Calculator unit tests are in `app/src/test` (`TakaTrimCalculatorTest`).
 
 ## Important Note
 
