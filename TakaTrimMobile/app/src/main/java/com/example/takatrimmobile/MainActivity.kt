@@ -37,6 +37,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -50,13 +51,12 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import java.math.BigDecimal
-import java.math.RoundingMode
 
-private const val METHOD_NPSB = "NPSB (bKash to Bank)"
-private const val METHOD_BANK = "Bank Transfer (bKash to Bank)"
-private const val ROUND_NORMAL = "Round normally"
-private const val ROUND_DOWN = "Cut extra decimals"
+private val Pink = Color(0xFFE2136E)
+private val Purple = Color(0xFF8B5CF6)
+private val PageBackground = Color(0xFFF4F6FB)
+private val TextDark = Color(0xFF101828)
+private val TextMuted = Color(0xFF667085)
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -69,130 +69,17 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-private data class CalculationResult(
-    val transfer: BigDecimal,
-    val fee: BigDecimal,
-    val total: BigDecimal,
-    val remaining: BigDecimal,
-    val exact: Boolean,
-)
-
-private fun String.toMoney(): BigDecimal {
-    val cleaned = trim()
-
-    if (cleaned.isEmpty()) {
-        throw IllegalArgumentException("Balance cannot be empty.")
-    }
-
-    return cleaned.toBigDecimal().setScale(2, RoundingMode.HALF_UP)
-}
-
-private fun roundFee(value: BigDecimal, roundingMode: String): BigDecimal {
-    val mode = if (roundingMode == ROUND_DOWN) {
-        RoundingMode.DOWN
-    } else {
-        RoundingMode.HALF_UP
-    }
-
-    return value.setScale(2, mode)
-}
-
-private fun calculateFee(
-    amount: BigDecimal,
-    method: String,
-    npsbPer1000: String,
-    bankPercent: String,
-    minFee: String,
-    roundingMode: String,
-): BigDecimal {
-    return when (method) {
-        METHOD_NPSB -> {
-            val feePer1000 = npsbPer1000.toMoney()
-            val rawFee = amount.multiply(feePer1000).divide(BigDecimal("1000"))
-            roundFee(rawFee, roundingMode)
-        }
-
-        METHOD_BANK -> {
-            val percent = bankPercent.toMoney()
-            val minimum = minFee.toMoney()
-            val rawFee = amount.multiply(percent).divide(BigDecimal("100"))
-            val fee = roundFee(rawFee, roundingMode)
-
-            if (fee < minimum) minimum else fee
-        }
-
-        else -> throw IllegalArgumentException("Invalid transfer type.")
-    }
-}
-
-private fun findTransferAmount(
-    balanceText: String,
-    method: String,
-    npsbPer1000: String,
-    bankPercent: String,
-    minFee: String,
-    roundingMode: String,
-): CalculationResult {
-    val balance = balanceText.toMoney()
-
-    if (balance <= BigDecimal.ZERO) {
-        throw IllegalArgumentException("Balance must be greater than 0.")
-    }
-
-    val maxCents = balance.movePointRight(2).toLong()
-
-    var low = 0L
-    var high = maxCents
-
-    var bestTransfer = BigDecimal("0.00")
-    var bestFee = BigDecimal("0.00")
-    var bestTotal = BigDecimal("0.00")
-
-    while (low <= high) {
-        val mid = (low + high) / 2L
-
-        val transfer = BigDecimal(mid)
-            .divide(BigDecimal("100"))
-            .setScale(2, RoundingMode.HALF_UP)
-
-        val fee = calculateFee(
-            amount = transfer,
-            method = method,
-            npsbPer1000 = npsbPer1000,
-            bankPercent = bankPercent,
-            minFee = minFee,
-            roundingMode = roundingMode,
-        )
-
-        val total = transfer.add(fee).setScale(2, RoundingMode.HALF_UP)
-
-        if (total <= balance) {
-            bestTransfer = transfer
-            bestFee = fee
-            bestTotal = total
-            low = mid + 1L
-        } else {
-            high = mid - 1L
-        }
-    }
-
-    return CalculationResult(
-        transfer = bestTransfer.setScale(2, RoundingMode.HALF_UP),
-        fee = bestFee.setScale(2, RoundingMode.HALF_UP),
-        total = bestTotal.setScale(2, RoundingMode.HALF_UP),
-        remaining = balance.subtract(bestTotal).setScale(2, RoundingMode.HALF_UP),
-        exact = bestTotal.compareTo(balance) == 0,
-    )
-}
-
 @Composable
 private fun TakaTrimTheme(content: @Composable () -> Unit) {
+    // Light-only design: avoids unreadable text when the phone is in dark mode.
     MaterialTheme(
         colorScheme = androidx.compose.material3.lightColorScheme(
-            primary = Color(0xFFE2136E),
-            secondary = Color(0xFF8B5CF6),
-            background = Color(0xFFF4F6FB),
+            primary = Pink,
+            secondary = Purple,
+            background = PageBackground,
             surface = Color.White,
+            onSurface = TextDark,
+            onBackground = TextDark,
         ),
         content = content,
     )
@@ -202,36 +89,55 @@ private fun TakaTrimTheme(content: @Composable () -> Unit) {
 private fun TakaTrimApp() {
     val clipboard = LocalClipboardManager.current
 
-    var balance by remember { mutableStateOf("") }
-    var method by remember { mutableStateOf(METHOD_NPSB) }
-    var roundingMode by remember { mutableStateOf(ROUND_NORMAL) }
+    // rememberSaveable keeps typed values across screen rotation.
+    var balance by rememberSaveable { mutableStateOf("") }
+    var method by rememberSaveable { mutableStateOf(TransferMethod.NPSB) }
+    var rounding by rememberSaveable { mutableStateOf(FeeRounding.NORMAL) }
+    var npsbFee by rememberSaveable { mutableStateOf("8.50") }
+    var bankPercent by rememberSaveable { mutableStateOf("1.25") }
+    var minFee by rememberSaveable { mutableStateOf("10.00") }
+    var settingsOpen by rememberSaveable { mutableStateOf(false) }
 
-    var npsbFee by remember { mutableStateOf("8.50") }
-    var bankPercent by remember { mutableStateOf("1.25") }
-    var minFee by remember { mutableStateOf("10.00") }
-    var settingsOpen by remember { mutableStateOf(false) }
-
-    var result by remember {
-        mutableStateOf(
-            CalculationResult(
-                transfer = BigDecimal("0.00"),
-                fee = BigDecimal("0.00"),
-                total = BigDecimal("0.00"),
-                remaining = BigDecimal("0.00"),
-                exact = false,
-            )
-        )
-    }
-
+    var result by remember { mutableStateOf<CalculationResult?>(null) }
     var status by remember { mutableStateOf("Ready") }
     var error by remember { mutableStateOf<String?>(null) }
+
+    fun clearResult(newStatus: String = "Ready") {
+        result = null
+        status = newStatus
+    }
+
+    fun calculate() {
+        try {
+            error = null
+            val calculated = TakaTrimCalculator.findTransferAmount(
+                balanceText = balance,
+                method = method,
+                settings = FeeSettings(
+                    npsbPer1000 = npsbFee,
+                    bankPercent = bankPercent,
+                    minFee = minFee,
+                    rounding = rounding,
+                ),
+            )
+            if (calculated.transfer.signum() == 0) {
+                clearResult("Balance too low for this fee")
+            } else {
+                result = calculated
+                status = if (calculated.exact) "Exact zero match" else "Closest safe amount"
+            }
+        } catch (e: CalculatorException) {
+            clearResult()
+            error = e.message
+        }
+    }
 
     if (settingsOpen) {
         FeeSettingsDialog(
             npsbFee = npsbFee,
             onNpsbFeeChange = { npsbFee = it },
-            roundingMode = roundingMode,
-            onRoundingModeChange = { roundingMode = it },
+            rounding = rounding,
+            onRoundingChange = { rounding = it },
             bankPercent = bankPercent,
             onBankPercentChange = { bankPercent = it },
             minFee = minFee,
@@ -242,7 +148,7 @@ private fun TakaTrimApp() {
 
     Surface(
         modifier = Modifier.fillMaxSize(),
-        color = Color(0xFFF4F6FB),
+        color = PageBackground,
     ) {
         Box(
             modifier = Modifier
@@ -258,9 +164,7 @@ private fun TakaTrimApp() {
                 verticalArrangement = Arrangement.spacedBy(8.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                HeaderCompact(
-                    onSettingsClick = { settingsOpen = true },
-                )
+                HeaderCompact(onSettingsClick = { settingsOpen = true })
 
                 Card(
                     modifier = Modifier.fillMaxWidth(),
@@ -276,6 +180,7 @@ private fun TakaTrimApp() {
                             text = "Transfer details",
                             fontSize = 17.sp,
                             fontWeight = FontWeight.ExtraBold,
+                            color = TextDark,
                         )
 
                         CompactTextField(
@@ -288,7 +193,8 @@ private fun TakaTrimApp() {
                         CompactDropdown(
                             label = "Transfer type",
                             selected = method,
-                            options = listOf(METHOD_NPSB, METHOD_BANK),
+                            options = TransferMethod.entries,
+                            optionLabel = { it.label },
                             onSelected = { method = it },
                         )
 
@@ -297,95 +203,15 @@ private fun TakaTrimApp() {
                                 .fillMaxWidth()
                                 .height(44.dp),
                             shape = RoundedCornerShape(13.dp),
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = Color(0xFFE2136E),
-                            ),
-                            onClick = {
-                                try {
-                                    error = null
-
-                                    result = findTransferAmount(
-                                        balanceText = balance,
-                                        method = method,
-                                        npsbPer1000 = npsbFee,
-                                        bankPercent = bankPercent,
-                                        minFee = minFee,
-                                        roundingMode = roundingMode,
-                                    )
-
-                                    status = if (result.exact) {
-                                        "Exact zero match"
-                                    } else {
-                                        "Closest safe amount"
-                                    }
-                                } catch (e: Exception) {
-                                    error = e.message ?: "Invalid input."
-                                }
-                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = Pink),
+                            onClick = { calculate() },
                         ) {
-                            Text(
-                                text = "Calculate",
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 15.sp,
-                            )
+                            Text(text = "Calculate", fontWeight = FontWeight.Bold, fontSize = 15.sp)
                         }
                     }
                 }
 
-                ResultCompact(
-                    status = status,
-                    result = result,
-                )
-
-                Spacer(modifier = Modifier.weight(1f))
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    OutlinedButton(
-                        modifier = Modifier
-                            .weight(1f)
-                            .height(42.dp),
-                        shape = RoundedCornerShape(13.dp),
-                        onClick = {
-                            clipboard.setText(AnnotatedString(result.transfer.toPlainString()))
-                            status = "Copied ${result.transfer.toPlainString()} Tk"
-                        },
-                    ) {
-                        Text(
-                            text = "Copy amount",
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 14.sp,
-                        )
-                    }
-
-                    OutlinedButton(
-                        modifier = Modifier
-                            .weight(1f)
-                            .height(42.dp),
-                        shape = RoundedCornerShape(13.dp),
-                        onClick = {
-                            balance = ""
-                            status = "Ready"
-                            error = null
-
-                            result = CalculationResult(
-                                transfer = BigDecimal("0.00"),
-                                fee = BigDecimal("0.00"),
-                                total = BigDecimal("0.00"),
-                                remaining = BigDecimal("0.00"),
-                                exact = false,
-                            )
-                        },
-                    ) {
-                        Text(
-                            text = "Clear",
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 14.sp,
-                        )
-                    }
-                }
+                ResultCompact(status = status, result = result)
 
                 error?.let {
                     Text(
@@ -400,38 +226,66 @@ private fun TakaTrimApp() {
                             .padding(8.dp),
                     )
                 }
+
+                Spacer(modifier = Modifier.weight(1f))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    OutlinedButton(
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(42.dp),
+                        shape = RoundedCornerShape(13.dp),
+                        enabled = result != null,
+                        onClick = {
+                            result?.let {
+                                val amount = it.transfer.toPlainString()
+                                clipboard.setText(AnnotatedString(amount))
+                                status = "Copied $amount Tk"
+                            }
+                        },
+                    ) {
+                        Text(text = "Copy amount", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                    }
+
+                    OutlinedButton(
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(42.dp),
+                        shape = RoundedCornerShape(13.dp),
+                        onClick = {
+                            balance = ""
+                            error = null
+                            clearResult()
+                        },
+                    ) {
+                        Text(text = "Clear", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                    }
+                }
             }
         }
     }
 }
 
 @Composable
-private fun HeaderCompact(
-    onSettingsClick: () -> Unit,
-) {
+private fun HeaderCompact(onSettingsClick: () -> Unit) {
     Box(
         modifier = Modifier
             .fillMaxWidth()
             .height(74.dp)
             .clip(RoundedCornerShape(18.dp))
-            .background(
-                Brush.horizontalGradient(
-                    listOf(Color(0xFFE2136E), Color(0xFF8B5CF6)),
-                )
-            )
+            .background(Brush.horizontalGradient(listOf(Pink, Purple)))
             .padding(horizontal = 16.dp, vertical = 8.dp),
     ) {
-        Column(
-            modifier = Modifier.align(Alignment.CenterStart),
-            verticalArrangement = Arrangement.spacedBy(0.dp),
-        ) {
+        Column(modifier = Modifier.align(Alignment.CenterStart)) {
             Text(
                 text = "TakaTrim",
                 color = Color.White,
                 fontSize = 25.sp,
                 fontWeight = FontWeight.ExtraBold,
             )
-
             Text(
                 text = "Exact transfer calculator",
                 color = Color.White.copy(alpha = 0.88f),
@@ -445,24 +299,16 @@ private fun HeaderCompact(
                 .height(38.dp),
             shape = RoundedCornerShape(20.dp),
             onClick = onSettingsClick,
-            colors = ButtonDefaults.outlinedButtonColors(
-                contentColor = Color.White,
-            ),
+            colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White),
         ) {
-            Text(
-                text = "⚙",
-                fontSize = 18.sp,
-                fontWeight = FontWeight.Bold,
-            )
+            Text(text = "⚙ Fees", fontSize = 14.sp, fontWeight = FontWeight.Bold)
         }
     }
 }
 
 @Composable
-private fun ResultCompact(
-    status: String,
-    result: CalculationResult,
-) {
+private fun ResultCompact(status: String, result: CalculationResult?) {
+    val zero = "0.00 Tk"
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(18.dp),
@@ -478,18 +324,13 @@ private fun ResultCompact(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(
-                    text = "Result",
-                    fontSize = 17.sp,
-                    fontWeight = FontWeight.ExtraBold,
-                )
-
+                Text(text = "Result", fontSize = 17.sp, fontWeight = FontWeight.ExtraBold, color = TextDark)
                 Text(
                     text = status,
-                    color = if (result.exact) {
-                        Color(0xFF027A48)
-                    } else {
-                        Color(0xFF344054)
+                    color = when {
+                        result == null -> Color(0xFF344054)
+                        result.exact -> Color(0xFF027A48)
+                        else -> Color(0xFFB45309)
                     },
                     fontSize = 12.sp,
                     fontWeight = FontWeight.Bold,
@@ -505,31 +346,32 @@ private fun ResultCompact(
             ) {
                 Text(
                     text = "TRANSFER AMOUNT",
-                    color = Color(0xFF667085),
+                    color = TextMuted,
                     fontSize = 11.sp,
                     fontWeight = FontWeight.ExtraBold,
                 )
-
                 Text(
-                    text = "${result.transfer.toPlainString()} Tk",
-                    color = Color(0xFFE2136E),
+                    text = result?.let { "${it.transfer.toPlainString()} Tk" } ?: zero,
+                    color = Pink,
                     fontSize = 31.sp,
                     fontWeight = FontWeight.ExtraBold,
                 )
             }
 
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 MiniStat(
                     label = "Fee",
-                    value = "${result.fee.toPlainString()} Tk",
+                    value = result?.let { "${it.fee.toPlainString()} Tk" } ?: zero,
                     modifier = Modifier.weight(1f),
                 )
-
                 MiniStat(
                     label = "Total",
-                    value = "${result.total.toPlainString()} Tk",
+                    value = result?.let { "${it.total.toPlainString()} Tk" } ?: zero,
+                    modifier = Modifier.weight(1f),
+                )
+                MiniStat(
+                    label = "Left",
+                    value = result?.let { "${it.remaining.toPlainString()} Tk" } ?: zero,
                     modifier = Modifier.weight(1f),
                 )
             }
@@ -538,11 +380,7 @@ private fun ResultCompact(
 }
 
 @Composable
-private fun MiniStat(
-    label: String,
-    value: String,
-    modifier: Modifier = Modifier,
-) {
+private fun MiniStat(label: String, value: String, modifier: Modifier = Modifier) {
     Column(
         modifier = modifier
             .clip(RoundedCornerShape(14.dp))
@@ -551,16 +389,16 @@ private fun MiniStat(
     ) {
         Text(
             text = label.uppercase(),
-            color = Color(0xFF667085),
+            color = TextMuted,
             fontSize = 10.sp,
             fontWeight = FontWeight.ExtraBold,
         )
-
         Text(
             text = value,
-            color = Color(0xFF101828),
-            fontSize = 16.sp,
+            color = TextDark,
+            fontSize = 14.sp,
             fontWeight = FontWeight.ExtraBold,
+            maxLines = 1,
         )
     }
 }
@@ -569,8 +407,8 @@ private fun MiniStat(
 private fun FeeSettingsDialog(
     npsbFee: String,
     onNpsbFeeChange: (String) -> Unit,
-    roundingMode: String,
-    onRoundingModeChange: (String) -> Unit,
+    rounding: FeeRounding,
+    onRoundingChange: (FeeRounding) -> Unit,
     bankPercent: String,
     onBankPercentChange: (String) -> Unit,
     minFee: String,
@@ -579,52 +417,39 @@ private fun FeeSettingsDialog(
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = {
-            Text(
-                text = "Fee settings",
-                fontWeight = FontWeight.ExtraBold,
-            )
-        },
+        title = { Text(text = "Fee settings", fontWeight = FontWeight.ExtraBold) },
         text = {
-            Column(
-                verticalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 CompactTextField(
                     value = npsbFee,
                     onValueChange = onNpsbFeeChange,
                     label = "NPSB fee per 1000 Tk",
                     placeholder = "8.50",
                 )
-
                 CompactDropdown(
                     label = "Fee rounding",
-                    selected = roundingMode,
-                    options = listOf(ROUND_NORMAL, ROUND_DOWN),
-                    onSelected = onRoundingModeChange,
+                    selected = rounding,
+                    options = FeeRounding.entries,
+                    optionLabel = { it.label },
+                    onSelected = onRoundingChange,
                 )
-
                 CompactTextField(
                     value = bankPercent,
                     onValueChange = onBankPercentChange,
                     label = "Bank transfer fee %",
                     placeholder = "1.25",
                 )
-
                 CompactTextField(
                     value = minFee,
                     onValueChange = onMinFeeChange,
-                    label = "Minimum fee",
+                    label = "Bank transfer minimum fee",
                     placeholder = "10.00",
                 )
             }
         },
         confirmButton = {
             TextButton(onClick = onDismiss) {
-                Text(
-                    text = "Done",
-                    color = Color(0xFFE2136E),
-                    fontWeight = FontWeight.Bold,
-                )
+                Text(text = "Done", color = Pink, fontWeight = FontWeight.Bold)
             }
         },
         shape = RoundedCornerShape(22.dp),
@@ -641,31 +466,17 @@ private fun CompactTextField(
     modifier: Modifier = Modifier,
 ) {
     OutlinedTextField(
-        modifier = modifier
-            .fillMaxWidth()
-            .height(56.dp),
+        modifier = modifier.fillMaxWidth(),
         value = value,
         onValueChange = onValueChange,
-        label = {
-            Text(
-                text = label,
-                fontSize = 11.sp,
-            )
-        },
-        placeholder = {
-            Text(
-                text = placeholder,
-                fontSize = 12.sp,
-            )
-        },
+        label = { Text(text = label, fontSize = 11.sp) },
+        placeholder = { Text(text = placeholder, fontSize = 12.sp) },
         singleLine = true,
-        textStyle = TextStyle(fontSize = 13.sp),
-        keyboardOptions = KeyboardOptions(
-            keyboardType = KeyboardType.Decimal,
-        ),
+        textStyle = TextStyle(fontSize = 14.sp, color = TextDark),
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
         shape = RoundedCornerShape(14.dp),
         colors = TextFieldDefaults.colors(
-            focusedIndicatorColor = Color(0xFFE2136E),
+            focusedIndicatorColor = Pink,
             unfocusedIndicatorColor = Color(0xFFD0D5DD),
             focusedContainerColor = Color.White,
             unfocusedContainerColor = Color.White,
@@ -675,11 +486,12 @@ private fun CompactTextField(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun CompactDropdown(
+private fun <T> CompactDropdown(
     label: String,
-    selected: String,
-    options: List<String>,
-    onSelected: (String) -> Unit,
+    selected: T,
+    options: List<T>,
+    optionLabel: (T) -> String,
+    onSelected: (T) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var expanded by remember { mutableStateOf(false) }
@@ -692,27 +504,17 @@ private fun CompactDropdown(
         OutlinedTextField(
             modifier = Modifier
                 .menuAnchor()
-                .fillMaxWidth()
-                .height(56.dp),
+                .fillMaxWidth(),
             readOnly = true,
-            value = selected,
+            value = optionLabel(selected),
             onValueChange = {},
-            label = {
-                Text(
-                    text = label,
-                    fontSize = 11.sp,
-                )
-            },
-            trailingIcon = {
-                ExposedDropdownMenuDefaults.TrailingIcon(
-                    expanded = expanded,
-                )
-            },
+            label = { Text(text = label, fontSize = 11.sp) },
+            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
             singleLine = true,
-            textStyle = TextStyle(fontSize = 13.sp),
+            textStyle = TextStyle(fontSize = 14.sp, color = TextDark),
             shape = RoundedCornerShape(14.dp),
             colors = TextFieldDefaults.colors(
-                focusedIndicatorColor = Color(0xFFE2136E),
+                focusedIndicatorColor = Pink,
                 unfocusedIndicatorColor = Color(0xFFD0D5DD),
                 focusedContainerColor = Color.White,
                 unfocusedContainerColor = Color.White,
@@ -725,12 +527,7 @@ private fun CompactDropdown(
         ) {
             options.forEach { option ->
                 DropdownMenuItem(
-                    text = {
-                        Text(
-                            text = option,
-                            fontSize = 13.sp,
-                        )
-                    },
+                    text = { Text(text = optionLabel(option), fontSize = 13.sp) },
                     onClick = {
                         onSelected(option)
                         expanded = false

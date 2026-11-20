@@ -1,4 +1,4 @@
-"""
+r"""
 TakaTrim
 
 Professional standalone Windows desktop app version.
@@ -9,11 +9,8 @@ It does NOT use browser, tkinter, input(), sys.exit(), or raise SystemExit().
 Install needed packages:
     py -m pip install PySide6 pyinstaller
 
-Build standalone EXE:
-    py -m PyInstaller --onefile --noconsole --name TakaTrim bkash_zero_balance_desktop_app.py
-
-If the EXE opens but closes instantly, rebuild with:
-    py -m PyInstaller --onefile --noconsole --collect-all PySide6 --name TakaTrim bkash_zero_balance_desktop_app.py
+Build standalone EXE (bundles the window icon and sets the EXE icon):
+    .\build_exe.ps1
 
 Your EXE will be here:
     dist\TakaTrim.exe
@@ -47,20 +44,42 @@ class CalculatorError(ValueError):
     """User-facing calculator error."""
 
 
+MAX_AMOUNT = Decimal("100000000")  # 10 crore Tk; far above any real bKash balance
+
+
 def to_decimal(value):
-    """Convert input to Decimal safely."""
-    try:
+    """Convert input to a finite Decimal, accepting "1,000", "Tk" and "৳"."""
+    if isinstance(value, Decimal):
+        number = value
+    else:
         text = str(value).strip()
+        for junk in (",", "৳", "Tk", "tk", "TK", " "):
+            text = text.replace(junk, "")
         if not text:
             raise CalculatorError("Value cannot be empty.")
-        return Decimal(text)
-    except (InvalidOperation, ValueError) as exc:
-        raise CalculatorError(f"Invalid number: {value}") from exc
+        try:
+            number = Decimal(text)
+        except InvalidOperation as exc:
+            raise CalculatorError(f"Invalid number: {str(value).strip()}") from exc
+
+    if not number.is_finite():
+        raise CalculatorError(f"Invalid number: {value}")
+    if abs(number) > MAX_AMOUNT:
+        raise CalculatorError("Number is too large.")
+    return number
 
 
 def money(value):
     """Normalize a value to 2 decimal places."""
     return to_decimal(value).quantize(CENT, rounding=ROUND_HALF_UP)
+
+
+def fee_setting(value, name):
+    """Parse a fee setting. Keeps full precision (e.g. 1.255%) and rejects negatives."""
+    number = to_decimal(value)
+    if number < 0:
+        raise CalculatorError(f"{name} cannot be negative.")
+    return number
 
 
 def round_fee(value, rounding_mode=ROUND_NORMAL):
@@ -91,13 +110,13 @@ def calculate_fee(
         raise CalculatorError("Transfer amount cannot be negative.")
 
     if method == METHOD_NPSB:
-        raw_fee = amount * money(npsb_per_1000) / Decimal("1000")
+        raw_fee = amount * fee_setting(npsb_per_1000, "NPSB fee") / Decimal("1000")
         return round_fee(raw_fee, rounding_mode)
 
     if method == METHOD_BANK:
-        raw_fee = amount * money(bank_percent) / Decimal("100")
+        raw_fee = amount * fee_setting(bank_percent, "Bank transfer fee %") / Decimal("100")
         fee = round_fee(raw_fee, rounding_mode)
-        return max(fee, money(min_fee))
+        return max(fee, money(fee_setting(min_fee, "Minimum fee")))
 
     raise CalculatorError("Invalid method. Use 'npsb' or 'bank'.")
 
@@ -120,17 +139,20 @@ def find_transfer_amount(
         remaining - balance - total
         exact     - True when remaining is exactly 0.00
 
-    The search brute-checks every paisa from highest to lowest. This avoids
-    formula mistakes around fee rounding boundaries.
+    Fee settings are non-negative, so the fee never decreases as the transfer
+    grows, and transfer + fee is strictly increasing paisa by paisa. That makes
+    a binary search over every paisa exact (same answer as checking each one)
+    while staying instant for large balances.
     """
     balance = money(balance)
 
     if balance <= 0:
         raise CalculatorError("Balance must be greater than 0.")
 
-    max_cents = int(balance * 100)
+    if method not in VALID_METHODS:
+        raise CalculatorError("Invalid method. Use 'npsb' or 'bank'.")
 
-    for cents in range(max_cents, -1, -1):
+    def total_for(cents):
         transfer = Decimal(cents) / Decimal("100")
         fee = calculate_fee(
             transfer,
@@ -140,16 +162,28 @@ def find_transfer_amount(
             min_fee=min_fee,
             rounding_mode=rounding_mode,
         )
-        total = transfer + fee
+        return transfer, fee, transfer + fee
 
+    best = None
+    low, high = 0, int(balance * 100)
+    while low <= high:
+        mid = (low + high) // 2
+        transfer, fee, total = total_for(mid)
         if total <= balance:
-            return {
-                "transfer": money(transfer),
-                "fee": money(fee),
-                "total": money(total),
-                "remaining": money(balance - total),
-                "exact": total == balance,
-            }
+            best = (transfer, fee, total)
+            low = mid + 1
+        else:
+            high = mid - 1
+
+    if best is not None:
+        transfer, fee, total = best
+        return {
+            "transfer": money(transfer),
+            "fee": money(fee),
+            "total": money(total),
+            "remaining": money(balance - total),
+            "exact": total == balance,
+        }
 
     return {
         "transfer": money("0"),
@@ -174,10 +208,7 @@ def format_result(result):
 
 def resource_path(relative_path):
     """Return a file path that works before and after PyInstaller builds the EXE."""
-    try:
-        base_path = sys._MEIPASS
-    except AttributeError:
-        base_path = os.path.abspath(".")
+    base_path = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
     return os.path.join(base_path, relative_path)
 
 
@@ -290,13 +321,12 @@ def run_cli(args):
 def run_gui_app():
     """Run the real desktop GUI. PySide6 is imported lazily for test/CLI safety."""
     try:
-        from PySide6.QtCore import Qt, QSize
+        from PySide6.QtCore import Qt
         from PySide6.QtGui import QGuiApplication, QIcon
         from PySide6.QtWidgets import (
             QApplication,
             QComboBox,
             QFrame,
-            QGridLayout,
             QHBoxLayout,
             QLabel,
             QLineEdit,
@@ -361,7 +391,8 @@ def run_gui_app():
             self.build_main_content(page)
             self.apply_styles()
 
-            self.last_transfer = "0.00"
+            self.last_transfer = None
+            self.copy_button.setEnabled(False)
             self.balance_input.setFocus()
 
         def build_header(self, page):
@@ -424,7 +455,6 @@ def run_gui_app():
             self.method_input = QComboBox()
             self.method_input.addItem("NPSB (bKash to Bank)", METHOD_NPSB)
             self.method_input.addItem("Bank Transfer (bKash to Bank)", METHOD_BANK)
-            self.method_input.currentIndexChanged.connect(self.update_fee_hint)
             self.add_field(left_layout, "Transfer type", self.method_input, "Choose the transfer option you are using in bKash")
 
             settings = QFrame()
@@ -526,15 +556,6 @@ def run_gui_app():
                 hint.setObjectName("Hint")
                 layout.addWidget(hint)
 
-        def add_grid_field(self, grid, row, col, label_text, widget):
-            box = QVBoxLayout()
-            box.setSpacing(6)
-            label = QLabel(label_text)
-            label.setObjectName("MiniLabel")
-            box.addWidget(label)
-            box.addWidget(widget)
-            grid.addLayout(box, row, col)
-
         def add_compact_field(self, layout, label_text, widget):
             row = QHBoxLayout()
             row.setSpacing(14)
@@ -550,11 +571,19 @@ def run_gui_app():
             row.addWidget(widget, 1, Qt.AlignVCenter)
             layout.addLayout(row)
 
-        def update_fee_hint(self):
-            # Kept for the transfer-type dropdown signal.
-            # Fee explanations were removed from the visible layout to prevent
-            # text from being clipped behind the action buttons on smaller windows.
-            return
+        def set_status(self, text, exact=None):
+            self.status_label.setText(text)
+            self.status_label.setProperty("exact", "" if exact is None else ("true" if exact else "false"))
+            self.status_label.style().unpolish(self.status_label)
+            self.status_label.style().polish(self.status_label)
+
+        def clear_result(self):
+            # Never leave an old amount on screen (or in Copy) after a failed calculation.
+            self.last_transfer = None
+            self.copy_button.setEnabled(False)
+            for card in (self.transfer_card, self.fee_card, self.total_card, self.remaining_card):
+                card.set_value("0.00 Tk")
+            self.set_status("Ready to calculate")
 
         def calculate(self):
             try:
@@ -566,26 +595,35 @@ def run_gui_app():
                     min_fee=self.min_fee_input.text(),
                     rounding_mode=self.rounding_input.currentData(),
                 )
-
-                self.last_transfer = f"{result['transfer']:.2f}"
-                self.status_label.setText("Exact zero match" if result["exact"] else "Closest safe amount")
-                self.status_label.setProperty("exact", "true" if result["exact"] else "false")
-                self.status_label.style().unpolish(self.status_label)
-                self.status_label.style().polish(self.status_label)
-
-                self.transfer_card.set_value(f"{result['transfer']:.2f} Tk")
-                self.fee_card.set_value(f"{result['fee']:.2f} Tk")
-                self.total_card.set_value(f"{result['total']:.2f} Tk")
-                self.remaining_card.set_value(f"{result['remaining']:.2f} Tk")
             except CalculatorError as exc:
+                self.clear_result()
                 QMessageBox.warning(self, "Invalid input", str(exc))
+                return
+            except Exception as exc:  # never let a slot exception kill the windowed EXE
+                self.clear_result()
+                QMessageBox.critical(self, "Unexpected error", f"Could not calculate: {exc}")
+                return
+
+            if result["transfer"] <= 0:
+                self.clear_result()
+                self.set_status("Balance too low for this fee", exact=False)
+                self.remaining_card.set_value(f"{result['remaining']:.2f} Tk")
+                return
+
+            self.last_transfer = f"{result['transfer']:.2f}"
+            self.copy_button.setEnabled(True)
+            self.set_status("Exact zero match" if result["exact"] else "Closest safe amount", result["exact"])
+
+            self.transfer_card.set_value(f"{result['transfer']:.2f} Tk")
+            self.fee_card.set_value(f"{result['fee']:.2f} Tk")
+            self.total_card.set_value(f"{result['total']:.2f} Tk")
+            self.remaining_card.set_value(f"{result['remaining']:.2f} Tk")
 
         def copy_amount(self):
+            if not self.last_transfer:
+                return
             QGuiApplication.clipboard().setText(self.last_transfer)
-            self.status_label.setText(f"Copied {self.last_transfer} Tk")
-            self.status_label.setProperty("exact", "true")
-            self.status_label.style().unpolish(self.status_label)
-            self.status_label.style().polish(self.status_label)
+            self.set_status(f"Copied {self.last_transfer} Tk", exact=True)
 
         def apply_styles(self):
             self.setStyleSheet(
@@ -647,7 +685,7 @@ def run_gui_app():
                 QLabel#SectionTitle {
                     color: #101828;
                     font-size: 20px;
-                    font-weight: 850;
+                    font-weight: 800;
                 }
                 QLabel#SmallTitle {
                     color: #101828;
@@ -656,7 +694,7 @@ def run_gui_app():
                 }
                 QLabel#FormLabel, QLabel#MiniLabel {
                     color: #344054;
-                    font-weight: 750;
+                    font-weight: 700;
                     font-size: 13px;
                 }
                 QLabel#Hint, QLabel#Instruction {
@@ -664,16 +702,10 @@ def run_gui_app():
                     font-size: 12px;
                     line-height: 1.35;
                 }
-                QLabel#HintBox {
-                    color: #667085;
-                    background: #ffffff;
-                    border: 1px solid #edf0f5;
-                    border-radius: 10px;
-                    padding: 8px 10px;
-                    font-size: 12px;
-                    line-height: 1.35;
-                }
                 QLineEdit, QComboBox {
+                    color: #111827;
+                    selection-background-color: #e2136e;
+                    selection-color: white;
                     background: white;
                     border: 1px solid #d0d5dd;
                     border-radius: 12px;
@@ -689,12 +721,18 @@ def run_gui_app():
                     border: 0;
                     width: 30px;
                 }
+                QComboBox QAbstractItemView {
+                    background: white;
+                    color: #111827;
+                    selection-background-color: #fff1f7;
+                    selection-color: #e2136e;
+                }
                 QPushButton {
                     border: none;
                     border-radius: 13px;
                     padding: 13px 16px;
                     font-size: 15px;
-                    font-weight: 850;
+                    font-weight: 800;
                 }
                 QPushButton#PrimaryButton {
                     background: #e2136e;
@@ -712,6 +750,9 @@ def run_gui_app():
                 }
                 QPushButton#SecondaryButton:hover {
                     background: #e4e7ec;
+                }
+                QPushButton#SecondaryButton:disabled {
+                    color: #98a2b3;
                 }
                 QLabel#StatusPill {
                     background: #f2f4f7;
@@ -747,13 +788,13 @@ def run_gui_app():
                 QLabel#AccentStatValue {
                     color: #e2136e;
                     font-size: 30px;
-                    font-weight: 950;
+                    font-weight: 900;
                     letter-spacing: -0.8px;
                 }
                 QLabel#StatValue {
                     color: #101828;
                     font-size: 20px;
-                    font-weight: 850;
+                    font-weight: 800;
                 }
                 QFrame#Divider {
                     color: #edf0f5;
@@ -767,6 +808,12 @@ def run_gui_app():
             )
 
     app = QApplication.instance() or QApplication(sys.argv[:1])
+    # The design is light-only. Without this, Windows dark mode gives Qt a white
+    # text palette and typed text becomes invisible on the white input boxes.
+    try:
+        app.styleHints().setColorScheme(Qt.ColorScheme.Light)
+    except AttributeError:  # Qt < 6.8
+        pass
     icon_path = resource_path("app_icon.ico")
     if os.path.exists(icon_path):
         app.setWindowIcon(QIcon(icon_path))
@@ -783,11 +830,19 @@ class BkashCalculatorTests(unittest.TestCase):
         self.assertEqual(result["total"], Decimal("940.39"))
         self.assertTrue(result["exact"])
 
-    def test_npsb_known_507_37(self):
-        result = find_transfer_amount("507.37", METHOD_NPSB, npsb_per_1000="8.50")
+    def test_npsb_known_507_37_cut_down(self):
+        # 503.10 + 4.27 is the "Cut extra decimals" split (4.27635 -> 4.27).
+        result = find_transfer_amount("507.37", METHOD_NPSB, npsb_per_1000="8.50", rounding_mode=ROUND_CUT_DOWN)
         self.assertEqual(result["transfer"], Decimal("503.10"))
         self.assertEqual(result["fee"], Decimal("4.27"))
         self.assertEqual(result["total"], Decimal("507.37"))
+        self.assertTrue(result["exact"])
+
+    def test_npsb_known_507_37_round(self):
+        # Normal rounding (4.27635 -> 4.28) still reaches exactly zero, one paisa lower.
+        result = find_transfer_amount("507.37", METHOD_NPSB, npsb_per_1000="8.50")
+        self.assertEqual(result["transfer"], Decimal("503.09"))
+        self.assertEqual(result["fee"], Decimal("4.28"))
         self.assertTrue(result["exact"])
 
     def test_bank_transfer_known_6637_70(self):
@@ -821,12 +876,74 @@ class BkashCalculatorTests(unittest.TestCase):
         self.assertEqual(result["total"], Decimal("118.00"))
         self.assertTrue(result["exact"])
 
-    def test_no_exact_match_returns_closest_safe(self):
+    def test_one_paisa_balance_is_exact(self):
         result = find_transfer_amount("0.01", METHOD_NPSB, npsb_per_1000="8.50")
         self.assertEqual(result["transfer"], Decimal("0.01"))
         self.assertEqual(result["fee"], Decimal("0.00"))
         self.assertEqual(result["total"], Decimal("0.01"))
         self.assertTrue(result["exact"])
+
+    def test_no_exact_match_returns_closest_safe(self):
+        # 100.00: 99.16 + 0.84 = 100.00 is impossible; 99.15 + 0.84 = 99.99 is the best fit.
+        result = find_transfer_amount("100.00", METHOD_NPSB, npsb_per_1000="8.50")
+        self.assertLessEqual(result["total"], Decimal("100.00"))
+        self.assertEqual(result["total"] + result["remaining"], Decimal("100.00"))
+
+    def test_balance_below_bank_min_fee(self):
+        result = find_transfer_amount("5.00", METHOD_BANK)
+        self.assertEqual(result["transfer"], Decimal("0.00"))
+        self.assertEqual(result["remaining"], Decimal("5.00"))
+        self.assertFalse(result["exact"])
+
+    def test_binary_search_matches_brute_force(self):
+        cases = [
+            (METHOD_NPSB, ROUND_NORMAL), (METHOD_NPSB, ROUND_CUT_DOWN),
+            (METHOD_BANK, ROUND_NORMAL), (METHOD_BANK, ROUND_CUT_DOWN),
+        ]
+        for balance in ("0.37", "9.99", "10.13", "118", "507.37", "940.39", "1234.56", "6637.70"):
+            for method, rounding in cases:
+                result = find_transfer_amount(balance, method, rounding_mode=rounding)
+                bal = money(balance)
+                expected = Decimal("0.00")
+                for cents in range(int(bal * 100), -1, -1):
+                    t = Decimal(cents) / 100
+                    if t + calculate_fee(t, method, rounding_mode=rounding) <= bal:
+                        expected = money(t)
+                        break
+                self.assertEqual(result["transfer"], expected, (balance, method, rounding))
+
+    def test_large_balance_is_fast(self):
+        import time
+        start = time.perf_counter()
+        find_transfer_amount("9999999.99", METHOD_BANK)
+        self.assertLess(time.perf_counter() - start, 0.5)
+
+    def test_non_finite_and_huge_inputs_rejected(self):
+        for value in ("nan", "inf", "-inf", "1e30", "", "   "):
+            with self.assertRaises(CalculatorError):
+                find_transfer_amount(value, METHOD_NPSB)
+
+    def test_empty_input_message(self):
+        with self.assertRaisesRegex(CalculatorError, "cannot be empty"):
+            find_transfer_amount("", METHOD_NPSB)
+
+    def test_commas_and_currency_accepted(self):
+        self.assertEqual(money("1,000.50"), Decimal("1000.50"))
+        self.assertEqual(money("৳ 940.39"), Decimal("940.39"))
+        self.assertEqual(money("940.39 Tk"), Decimal("940.39"))
+
+    def test_negative_or_invalid_fee_settings_rejected(self):
+        for bad in ("-5", "nan"):
+            with self.assertRaises(CalculatorError):
+                find_transfer_amount("100", METHOD_NPSB, npsb_per_1000=bad)
+            with self.assertRaises(CalculatorError):
+                find_transfer_amount("100", METHOD_BANK, bank_percent=bad)
+            with self.assertRaises(CalculatorError):
+                find_transfer_amount("100", METHOD_BANK, min_fee=bad)
+
+    def test_fee_rate_keeps_full_precision(self):
+        # 1.255% of 1000 = 12.55; rounding the rate to 1.26% would give 12.60.
+        self.assertEqual(calculate_fee("1000", METHOD_BANK, bank_percent="1.255"), Decimal("12.55"))
 
     def test_cut_down_rounding_mode(self):
         fee = calculate_fee("932.46", METHOD_NPSB, npsb_per_1000="8.50", rounding_mode=ROUND_CUT_DOWN)
@@ -889,7 +1006,16 @@ def run_tests():
     return 0 if result.wasSuccessful() else 1
 
 
+def ensure_std_streams():
+    """A --noconsole EXE has no stdout/stderr; print() would crash without this."""
+    if sys.stdout is None:
+        sys.stdout = open(os.devnull, "w", encoding="utf-8")
+    if sys.stderr is None:
+        sys.stderr = open(os.devnull, "w", encoding="utf-8")
+
+
 def main(argv=None):
+    ensure_std_streams()
     if argv is None:
         argv = sys.argv[1:]
 
