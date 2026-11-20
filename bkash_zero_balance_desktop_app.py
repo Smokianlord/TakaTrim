@@ -321,12 +321,13 @@ def run_cli(args):
 def run_gui_app():
     """Run the real desktop GUI. PySide6 is imported lazily for test/CLI safety."""
     try:
-        from PySide6.QtCore import Qt
+        from PySide6.QtCore import QEasingCurve, QPoint, QPropertyAnimation, Qt, QTimer
         from PySide6.QtGui import QGuiApplication, QIcon
         from PySide6.QtWidgets import (
             QApplication,
             QComboBox,
             QFrame,
+            QGraphicsOpacityEffect,
             QHBoxLayout,
             QLabel,
             QLineEdit,
@@ -393,7 +394,49 @@ def run_gui_app():
 
             self.last_transfer = None
             self.copy_button.setEnabled(False)
+            self.build_copy_toast()
             self.balance_input.setFocus()
+
+        def build_copy_toast(self):
+            # Small floating "Copied" bubble shown above the Copy button for ~1.5 s.
+            self.copy_toast = QLabel(self)
+            self.copy_toast.setObjectName("CopyToast")
+            self.copy_toast.setAlignment(Qt.AlignCenter)
+            self.copy_toast.setAttribute(Qt.WA_TransparentForMouseEvents)
+            self.copy_toast.hide()
+            self.toast_opacity = QGraphicsOpacityEffect(self.copy_toast)
+            self.copy_toast.setGraphicsEffect(self.toast_opacity)
+            self.toast_fade = QPropertyAnimation(self.toast_opacity, b"opacity", self)
+            self.toast_fade.setDuration(350)
+            self.toast_fade.setEasingCurve(QEasingCurve.OutCubic)
+            self.toast_fade.finished.connect(self.on_toast_fade_finished)
+            self.toast_timer = QTimer(self)
+            self.toast_timer.setSingleShot(True)
+            self.toast_timer.timeout.connect(self.fade_out_toast)
+
+        def show_copy_toast(self, text):
+            self.toast_timer.stop()
+            self.toast_fade.stop()
+            self.copy_toast.setText(text)
+            self.copy_toast.adjustSize()
+            self.copy_toast.resize(self.copy_toast.width() + 28, 36)
+            button_top_center = self.copy_button.mapTo(self, QPoint(self.copy_button.width() // 2, 0))
+            x = button_top_center.x() - self.copy_toast.width() // 2
+            x = max(8, min(x, self.width() - self.copy_toast.width() - 8))
+            self.copy_toast.move(x, button_top_center.y() - self.copy_toast.height() - 8)
+            self.toast_opacity.setOpacity(1.0)
+            self.copy_toast.show()
+            self.copy_toast.raise_()
+            self.toast_timer.start(1500)
+
+        def fade_out_toast(self):
+            self.toast_fade.setStartValue(1.0)
+            self.toast_fade.setEndValue(0.0)
+            self.toast_fade.start()
+
+        def on_toast_fade_finished(self):
+            if self.toast_opacity.opacity() <= 0.01:
+                self.copy_toast.hide()
 
         def build_header(self, page):
             header = QFrame()
@@ -622,8 +665,14 @@ def run_gui_app():
         def copy_amount(self):
             if not self.last_transfer:
                 return
-            QGuiApplication.clipboard().setText(self.last_transfer)
-            self.set_status(f"Copied {self.last_transfer} Tk", exact=True)
+            clipboard = QGuiApplication.clipboard()
+            clipboard.setText(self.last_transfer)
+            if clipboard.text() == self.last_transfer:
+                self.set_status(f"Copied {self.last_transfer} Tk", exact=True)
+                self.show_copy_toast(f"✓ Copied {self.last_transfer} Tk")
+            else:
+                self.set_status("Copy failed, try again", exact=False)
+                self.show_copy_toast("Copy failed")
 
         def apply_styles(self):
             self.setStyleSheet(
@@ -803,6 +852,13 @@ def run_gui_app():
                 }
                 QMessageBox {
                     background: white;
+                }
+                QLabel#CopyToast {
+                    background: #101828;
+                    color: white;
+                    border-radius: 18px;
+                    font-size: 13px;
+                    font-weight: 800;
                 }
                 """
             )
