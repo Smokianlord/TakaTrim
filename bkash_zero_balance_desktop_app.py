@@ -26,6 +26,7 @@ Command-line examples still work:
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP, ROUND_DOWN, getcontext
 import os
 import sys
+import tempfile
 import unittest
 
 getcontext().prec = 28
@@ -322,7 +323,8 @@ def run_gui_app():
     """Run the real desktop GUI. PySide6 is imported lazily for test/CLI safety."""
     try:
         from PySide6.QtCore import QEasingCurve, QPoint, QPropertyAnimation, Qt, QTimer
-        from PySide6.QtGui import QGuiApplication, QIcon
+        from PySide6.QtCore import QPointF
+        from PySide6.QtGui import QColor, QGuiApplication, QIcon, QPainter, QPen, QPixmap
         from PySide6.QtWidgets import (
             QApplication,
             QComboBox,
@@ -394,6 +396,8 @@ def run_gui_app():
 
             self.last_transfer = None
             self.copy_button.setEnabled(False)
+            for combo in (self.method_input, self.rounding_input):
+                combo.setCursor(Qt.PointingHandCursor)
             self.build_copy_toast()
             self.balance_input.setFocus()
 
@@ -861,7 +865,52 @@ def run_gui_app():
                     font-weight: 800;
                 }
                 """
+                + self.combo_arrow_style()
             )
+
+        def combo_arrow_style(self):
+            # Styling QComboBox removes Qt's native arrow, so draw a chevron and use it.
+            arrows = {}
+            for name, color in (("idle", "#667085"), ("active", "#e2136e")):
+                pixmap = QPixmap(28, 18)
+                pixmap.setDevicePixelRatio(2.0)
+                pixmap.fill(Qt.transparent)
+                painter = QPainter(pixmap)
+                painter.setRenderHint(QPainter.Antialiasing)
+                pen = QPen(QColor(color), 2.0)
+                pen.setCapStyle(Qt.RoundCap)
+                pen.setJoinStyle(Qt.RoundJoin)
+                painter.setPen(pen)
+                painter.drawPolyline([QPointF(2.5, 2.5), QPointF(7.0, 6.5), QPointF(11.5, 2.5)])
+                painter.end()
+                path = os.path.join(tempfile.gettempdir(), f"takatrim_combo_arrow_{name}.png")
+                pixmap.save(path, "PNG")
+                arrows[name] = path.replace("\\", "/")
+            return f"""
+                QComboBox {{
+                    padding-right: 36px;
+                }}
+                QComboBox:focus {{
+                    padding-right: 35px;
+                }}
+                QComboBox:hover:!focus {{
+                    border: 1px solid #e2136e;
+                }}
+                QComboBox::drop-down {{
+                    subcontrol-origin: padding;
+                    subcontrol-position: center right;
+                    width: 36px;
+                    border: 0;
+                }}
+                QComboBox::down-arrow {{
+                    image: url("{arrows['idle']}");
+                    width: 14px;
+                    height: 9px;
+                }}
+                QComboBox::down-arrow:hover, QComboBox::down-arrow:on {{
+                    image: url("{arrows['active']}");
+                }}
+                """
 
     app = QApplication.instance() or QApplication(sys.argv[:1])
     # The design is light-only. Without this, Windows dark mode gives Qt a white
