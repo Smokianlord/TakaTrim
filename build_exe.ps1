@@ -10,4 +10,7 @@ py -m PyInstaller --noconfirm --clean --onefile --noconsole `
     bkash_zero_balance_desktop_app.py
 
 if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed with exit code $LASTEXITCODE" }
-Get-Item dist\TakaTrim.exe | Select-Object FullName, Length, LastWriteTime
+
+# The released EXE lives in the repo's main folder (tracked in git).
+Copy-Item dist\TakaTrim.exe .\TakaTrim.exe -Force
+Get-Item .\TakaTrim.exe | Select-Object FullName, Length, LastWriteTime

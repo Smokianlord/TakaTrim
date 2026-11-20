@@ -35,7 +35,7 @@ py -m pip install PySide6 pyinstaller
 .\build_exe.ps1
 ```
 
-The EXE is written to `dist\TakaTrim.exe`.
+The EXE is written to `TakaTrim.exe` in the main folder (a working copy also stays in `dist\`).
 
 Run the calculator tests:
 
