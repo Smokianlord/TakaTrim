@@ -3,6 +3,8 @@ package com.example.takatrimmobile
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -12,6 +14,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.widthIn
@@ -34,6 +37,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -41,6 +45,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -51,6 +56,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.delay
 
 private val Pink = Color(0xFFE2136E)
 private val Purple = Color(0xFF8B5CF6)
@@ -101,6 +107,17 @@ private fun TakaTrimApp() {
     var result by remember { mutableStateOf<CalculationResult?>(null) }
     var status by remember { mutableStateOf("Ready") }
     var error by remember { mutableStateOf<String?>(null) }
+
+    // "Copied" flash bubble: copyFlashId restarts the 1.5 s timer on every tap.
+    var copyFlashText by remember { mutableStateOf("") }
+    var copyFlashVisible by remember { mutableStateOf(false) }
+    var copyFlashId by remember { mutableStateOf(0) }
+    LaunchedEffect(copyFlashId) {
+        if (copyFlashId > 0) {
+            delay(1500)
+            copyFlashVisible = false
+        }
+    }
 
     fun clearResult(newStatus: String = "Ready") {
         result = null
@@ -233,21 +250,39 @@ private fun TakaTrimApp() {
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    OutlinedButton(
-                        modifier = Modifier
-                            .weight(1f)
-                            .height(42.dp),
-                        shape = RoundedCornerShape(13.dp),
-                        enabled = result != null,
-                        onClick = {
-                            result?.let {
-                                val amount = it.transfer.toPlainString()
-                                clipboard.setText(AnnotatedString(amount))
-                                status = "Copied $amount Tk"
-                            }
-                        },
+                    Box(
+                        modifier = Modifier.weight(1f),
+                        contentAlignment = Alignment.Center,
                     ) {
-                        Text(text = "Copy amount", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                        OutlinedButton(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(42.dp),
+                            shape = RoundedCornerShape(13.dp),
+                            enabled = result != null,
+                            onClick = {
+                                result?.let {
+                                    val amount = it.transfer.toPlainString()
+                                    clipboard.setText(AnnotatedString(amount))
+                                    val copied = clipboard.getText()?.text == amount
+                                    status = if (copied) "Copied $amount Tk" else "Copy failed, try again"
+                                    copyFlashText = if (copied) "✓ Copied $amount Tk" else "Copy failed"
+                                    copyFlashVisible = true
+                                    copyFlashId += 1
+                                }
+                            },
+                        ) {
+                            Text(text = "Copy amount", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                        }
+
+                        CopyFlash(
+                            text = copyFlashText,
+                            visible = copyFlashVisible,
+                            // Floats just above the button without pushing the layout around.
+                            modifier = Modifier
+                                .align(Alignment.TopCenter)
+                                .offset(y = (-44).dp),
+                        )
                     }
 
                     OutlinedButton(
@@ -266,6 +301,29 @@ private fun TakaTrimApp() {
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun CopyFlash(text: String, visible: Boolean, modifier: Modifier = Modifier) {
+    val alpha by animateFloatAsState(
+        targetValue = if (visible) 1f else 0f,
+        animationSpec = tween(durationMillis = 250),
+        label = "copyFlashAlpha",
+    )
+    if (alpha > 0f) {
+        Text(
+            text = text,
+            color = Color.White,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.ExtraBold,
+            maxLines = 1,
+            modifier = modifier
+                .alpha(alpha)
+                .clip(RoundedCornerShape(18.dp))
+                .background(TextDark)
+                .padding(horizontal = 14.dp, vertical = 8.dp),
+        )
     }
 }
 
